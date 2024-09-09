@@ -80,19 +80,28 @@ func (s *Server) handleConnections() {
 		select {
 		case client := <-s.joinch:
 			s.clients[client.conn] = client.username
-			s.broadcast(fmt.Sprintf("User %s has joined the chat", client.username), "Server")
-
-			// Send the ASCII art to the newly connected client
-			s.sendAsciiArt(client.conn)
+			joinMsg := Message{
+				from:      "Server",
+				payload:   fmt.Sprintf("%s has joined our chat...", client.username),
+				timestamp: time.Now().Format("2006-01-02 15:04:05"),
+			}
+			s.history = append(s.history, joinMsg)
+			s.broadcast(joinMsg)
 
 			// Send chat history
 			s.sendHistory(client.conn)
 		case client := <-s.leavech:
+			leaveMsg := Message{
+				from:      "Server",
+				payload:   fmt.Sprintf("%s has left our chat...", client.username),
+				timestamp: time.Now().Format("2006-01-02 15:04:05"),
+			}
+			s.history = append(s.history, leaveMsg)
+			s.broadcast(leaveMsg)
 			delete(s.clients, client.conn)
-			s.broadcast(fmt.Sprintf("User %s has left the chat", client.username), "Server")
 		case msg := <-s.msgch:
 			s.history = append(s.history, msg)
-			s.broadcast(fmt.Sprintf("[%s][%s]: %s", msg.timestamp, msg.from, msg.payload), msg.from)
+			s.broadcast(msg)
 		}
 	}
 }
@@ -114,9 +123,12 @@ func (s *Server) acceptLoop() {
 	}
 }
 
-// handleNewClient handles the process of asking for a username and joining the client to the server
+// handleNewClient handles the process of sending ASCII art, asking for a username, and joining the client to the server
 func (s *Server) handleNewClient(conn net.Conn) {
-	conn.Write([]byte("Enter your username: "))
+	// Send the welcome message with ASCII art
+	s.sendAsciiArt(conn)
+	conn.Write([]byte("[ENTER YOUR NAME]: "))
+
 	buf := make([]byte, 2048)
 	n, err := conn.Read(buf)
 	if err != nil {
@@ -125,6 +137,11 @@ func (s *Server) handleNewClient(conn net.Conn) {
 		return
 	}
 	username := string(buf[:n-1]) // removing the newline character
+	if len(username) == 0 {
+		conn.Write([]byte("Username cannot be empty. Connection will be closed.\n"))
+		conn.Close()
+		return
+	}
 	client := Client{conn: conn, username: username}
 	s.joinch <- client
 	go s.readLoop(client)
@@ -150,13 +167,27 @@ func (s *Server) readLoop(client Client) {
 			timestamp: time.Now().Format("2006-01-02 15:04:05"),
 		}
 		s.msgch <- msg
+
+		// Send an empty message to simulate the blank line
+		s.msgch <- Message{
+			from:      client.username,
+			payload:   "",
+			timestamp: time.Now().Format("2006-01-02 15:04:05"),
+		}
 	}
 }
 
 // broadcast sends a message to all connected clients
-func (s *Server) broadcast(message string, from string) {
+func (s *Server) broadcast(msg Message) {
+	var formattedMessage string
+	if msg.from == "Server" {
+		formattedMessage = fmt.Sprintf("%s\n", msg.payload)
+	} else {
+		formattedMessage = fmt.Sprintf("[%s][%s]: %s\n", msg.timestamp, msg.from, msg.payload)
+	}
+
 	for conn := range s.clients {
-		_, err := conn.Write([]byte(fmt.Sprintf("%s\n", message)))
+		_, err := conn.Write([]byte(formattedMessage))
 		if err != nil {
 			fmt.Println("Broadcast Error:", err)
 		}
@@ -166,7 +197,14 @@ func (s *Server) broadcast(message string, from string) {
 // sendHistory sends all previous messages to a newly connected client
 func (s *Server) sendHistory(conn net.Conn) {
 	for _, msg := range s.history {
-		_, err := conn.Write([]byte(fmt.Sprintf("[%s][%s]: %s\n", msg.timestamp, msg.from, msg.payload)))
+		var formattedMessage string
+		if msg.from == "Server" {
+			formattedMessage = fmt.Sprintf("%s\n", msg.payload)
+		} else {
+			formattedMessage = fmt.Sprintf("[%s][%s]: %s\n", msg.timestamp, msg.from, msg.payload)
+		}
+
+		_, err := conn.Write([]byte(formattedMessage))
 		if err != nil {
 			fmt.Println("History Send Error:", err)
 		}
@@ -181,10 +219,12 @@ func (s *Server) sendAsciiArt(conn net.Conn) {
 		return
 	}
 
+	conn.Write([]byte("Welcome to TCP-Chat!\n"))
 	_, err = conn.Write(content)
 	if err != nil {
 		fmt.Println("Failed to send the ASCII art to the client:", err)
 	}
+	conn.Write([]byte("\n"))
 }
 
 // main function starts the chat server
