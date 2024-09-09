@@ -86,7 +86,7 @@ func (s *Server) handleConnections() {
 				timestamp: time.Now().Format("2006-01-02 15:04:05"),
 			}
 			s.history = append(s.history, joinMsg)
-			s.broadcast(joinMsg)
+			s.broadcast(joinMsg, client.conn) // Exclude the joining client
 
 			// Send chat history
 			s.sendHistory(client.conn)
@@ -97,14 +97,15 @@ func (s *Server) handleConnections() {
 				timestamp: time.Now().Format("2006-01-02 15:04:05"),
 			}
 			s.history = append(s.history, leaveMsg)
-			s.broadcast(leaveMsg)
+			s.broadcast(leaveMsg, client.conn) // Exclude the leaving client
 			delete(s.clients, client.conn)
 		case msg := <-s.msgch:
 			s.history = append(s.history, msg)
-			s.broadcast(msg)
+			s.broadcast(msg, nil) // Broadcast to all clients
 		}
 	}
 }
+
 
 // acceptLoop handles incoming client connections
 func (s *Server) acceptLoop() {
@@ -147,7 +148,6 @@ func (s *Server) handleNewClient(conn net.Conn) {
 	go s.readLoop(client)
 }
 
-// readLoop reads messages from a connected client and forwards them to the msgch channel
 func (s *Server) readLoop(client Client) {
 	defer func() {
 		s.leavech <- client
@@ -168,17 +168,20 @@ func (s *Server) readLoop(client Client) {
 		}
 		s.msgch <- msg
 
-		// Send an empty message to simulate the blank line
+		// Remove this part to avoid sending empty messages:
+		/*
 		s.msgch <- Message{
 			from:      client.username,
 			payload:   "",
 			timestamp: time.Now().Format("2006-01-02 15:04:05"),
 		}
+		*/
 	}
 }
 
-// broadcast sends a message to all connected clients
-func (s *Server) broadcast(msg Message) {
+
+// broadcast sends a message to all connected clients except the sender
+func (s *Server) broadcast(msg Message, senderConn net.Conn) {
 	var formattedMessage string
 	if msg.from == "Server" {
 		formattedMessage = fmt.Sprintf("%s\n", msg.payload)
@@ -187,12 +190,15 @@ func (s *Server) broadcast(msg Message) {
 	}
 
 	for conn := range s.clients {
-		_, err := conn.Write([]byte(formattedMessage))
-		if err != nil {
-			fmt.Println("Broadcast Error:", err)
+		if conn != senderConn {
+			_, err := conn.Write([]byte(formattedMessage))
+			if err != nil {
+				fmt.Println("Broadcast Error:", err)
+			}
 		}
 	}
 }
+
 
 // sendHistory sends all previous messages to a newly connected client
 func (s *Server) sendHistory(conn net.Conn) {
