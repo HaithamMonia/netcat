@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,16 +27,16 @@ type Client struct {
 
 // Server struct to represent the chat server
 type Server struct {
-	listenAddr  string // the ip address and the port number of the server
-	ln          net.Listener // network listener for accepting connections
-	quitch      chan struct{}  // chan to signal the server to shut down
-	msgch       chan Message // chan used to broadcast messages 
-	joinch      chan Client // chan used  for handling new client connections 
-	leavech     chan Client  // chan used for handling client disconnections
-	clients     map[net.Conn]string  // map used to map a client to its connection
-	history     []Message  // A slice used to store the messages 
-	mu          sync.Mutex  // A mutex to ensure safe concurrent access to shared resources 
-	clientCount int // Track the number of connected clients
+	listenAddr  string              // the ip address and the port number of the server
+	ln          net.Listener        // network listener for accepting connections
+	quitch      chan struct{}       // chan to signal the server to shut down
+	msgch       chan Message        // chan used to broadcast messages
+	joinch      chan Client         // chan used  for handling new client connections
+	leavech     chan Client         // chan used for handling client disconnections
+	clients     map[net.Conn]string // map used to map a client to its connection
+	history     []Message           // A slice used to store the messages
+	mu          sync.Mutex          // A mutex to ensure safe concurrent access to shared resources
+	clientCount int                 // Track the number of connected clients
 }
 
 const maxClients = 10 // Maximum number of clients
@@ -55,7 +56,7 @@ func NewServer(listenAddr string) *Server {
 
 // start initiates the server to listen for incoming connections
 func (s *Server) start() error {
-	ln, err := net.Listen("tcp", s.listenAddr)
+	ln, err := net.Listen("tcp", "0.0.0.0:8989")
 	if err != nil {
 		return err
 	}
@@ -107,7 +108,7 @@ func (s *Server) handleConnections() {
 			s.mu.Unlock()
 		case msg := <-s.msgch:
 			s.history = append(s.history, msg)
-			s.broadcast(msg, nil) // Broadcast to all clients
+			s.broadcast(msg, s.GetConnFromUsername(msg.from)) // Broadcast to all clients
 		}
 	}
 }
@@ -136,47 +137,46 @@ func (s *Server) acceptLoop() {
 
 // handleNewClient handles the process of sending ASCII art, asking for a username, and joining the client to the server
 func (s *Server) handleNewClient(conn net.Conn) {
-    // Send the welcome message with ASCII art
-    s.sendAsciiArt(conn)
-    conn.Write([]byte("[ENTER YOUR NAME]: "))
+	// Send the welcome message with ASCII art
+	s.sendAsciiArt(conn)
+	conn.Write([]byte("[ENTER YOUR NAME]: "))
 
-    buf := make([]byte, 2048)
-    n, err := conn.Read(buf)
-    if err != nil {
-        fmt.Println("Username Read Error:", err)
-        conn.Close()
-        return
-    }
-    username := string(buf[:n-1]) // removing the newline character
-    if len(username) == 0 {
-        conn.Write([]byte("Username cannot be empty. Connection will be closed.\n"))
-        conn.Close()
-        return
-    }
-    client := Client{conn: conn, username: username}
+	buf := make([]byte, 2048) // reading the username
+	n, err := conn.Read(buf)
+	if err != nil {
+		fmt.Println("Username Read Error:", err)
+		conn.Close()
+		return
+	}
+	username := string(buf[:n-1]) // verifying the username
+	if len(username) == 0 || s.GetConnFromUsername(username) != nil {
+		conn.Write([]byte("Username cannot be empty. Connection will be closed.\n"))
+		conn.Close()
+		return
+	}
+	client := Client{conn: conn, username: username}
 
-    // Add the client to the server's list of clients
-    s.mu.Lock()
-    s.clients[client.conn] = client.username
-    s.clientCount++
-    s.mu.Unlock()
+	// Add the client to the server's list of clients
+	s.mu.Lock()
+	s.clients[client.conn] = client.username
+	s.clientCount++
+	s.mu.Unlock()
 
-    // Send chat history before broadcasting the join message
-    s.sendHistory(client.conn)
+	// Send chat history before broadcasting the join message
+	s.sendHistory(client.conn)
 
-    // Now broadcast the join message to other clients
-    joinMsg := Message{
-        from:      "Server",
-        payload:   fmt.Sprintf("%s has joined our chat...", client.username),
-        timestamp: time.Now().Format("2006-01-02 15:04:05"),
-    }
-    s.history = append(s.history, joinMsg)
-    s.broadcast(joinMsg, client.conn) // Exclude the joining client
+	// Now broadcast the join message to other clients
+	joinMsg := Message{
+		from:      "Server",
+		payload:   fmt.Sprintf("%s has joined our chat...", client.username),
+		timestamp: time.Now().Format("2006-01-02 15:04:05"),
+	}
+	s.history = append(s.history, joinMsg)
+	s.broadcast(joinMsg, client.conn) // Exclude the joining client
 
-    // Start the read loop for the new client
-    go s.readLoop(client)
+	// Start the read loop for the new client
+	go s.readLoop(client)
 }
-
 
 func (s *Server) readLoop(client Client) {
 	defer func() {
@@ -187,10 +187,17 @@ func (s *Server) readLoop(client Client) {
 	buf := make([]byte, 2048)
 	for {
 		n, err := client.conn.Read(buf)
+		// fmt.Println("hello", IsEmpty(string(buf[:n-1])))
 		if err != nil {
 			fmt.Println("Read Error:", err)
 			return
 		}
+
+		if IsEmpty(string(buf[:n-1])) {
+			fmt.Println("found empty message")
+			continue
+		}
+
 		msg := Message{
 			from:      client.username,
 			payload:   string(buf[:n-1]), // removing the newline character
@@ -220,7 +227,6 @@ func (s *Server) broadcast(msg Message, excludeConn net.Conn) {
 		}
 	}
 }
-
 
 // sendHistory sends all previous messages to a newly connected client
 func (s *Server) sendHistory(conn net.Conn) {
@@ -271,7 +277,27 @@ func main() {
 	}
 	fmt.Println("Listening on the port ", port)
 
-	server := NewServer(port)
+	server := NewServer("0.0.0.0" + port)
 	go server.handleConnections()
 	log.Fatal(server.start())
+}
+
+func (s *Server) GetConnFromUsername(from string) net.Conn {
+	for conn, username := range s.clients {
+		// Skip sending the message to the excluded connection (newly joined client)
+		if username == from {
+			return conn
+		}
+	}
+	return nil
+}
+
+func IsEmpty(str string) bool {
+	fmt.Printf("before str: ***%v***\n", str)
+	str = strings.TrimSpace(str)
+	fmt.Printf("after str: ***%v***\n", str)
+	if str == "" {
+		return true
+	}
+	return false
 }
