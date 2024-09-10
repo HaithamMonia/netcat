@@ -46,7 +46,7 @@ func NewServer(listenAddr string) *Server {
 	return &Server{
 		listenAddr: listenAddr,
 		quitch:     make(chan struct{}),
-		msgch:      make(chan Message, 10),
+		msgch:      make(chan Message),
 		joinch:     make(chan Client),
 		leavech:    make(chan Client),
 		clients:    make(map[net.Conn]string),
@@ -56,7 +56,7 @@ func NewServer(listenAddr string) *Server {
 
 // start initiates the server to listen for incoming connections
 func (s *Server) start() error {
-	ln, err := net.Listen("tcp", "0.0.0.0:8989")
+	ln, err := net.Listen("tcp", s.listenAddr)
 	if err != nil {
 		return err
 	}
