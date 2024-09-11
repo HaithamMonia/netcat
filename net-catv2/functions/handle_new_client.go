@@ -18,7 +18,12 @@ func (s *Server) HandleNewClient(conn net.Conn) {
 		return
 	}
 	username := string(buf[:n-1]) // Removing the newline character
-	if len(username) == 0 || s.GetConnFromUsername(username) != nil {
+	if s.GetConnFromUsername(username) != nil {
+		conn.Write([]byte("The Username aready exists. Connection will be closed.\n"))
+		conn.Close()
+		return
+	}
+	if len(username) == 0 {
 		conn.Write([]byte("Username cannot be empty. Connection will be closed.\n"))
 		conn.Close()
 		return

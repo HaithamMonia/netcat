@@ -12,7 +12,7 @@ func main() {
 	var port string
 	if len(os.Args) == 1 {
 		port = ":8989"
-	} else {
+	} else if len(os.Args) ==2 {
 		port = os.Args[1]
 		portNum, err := strconv.Atoi(port)
 		if err != nil || portNum < 1 || portNum > 65535 {
@@ -20,6 +20,9 @@ func main() {
 			return
 		}
 		port = ":" + port
+	}else{
+		fmt.Println("[USAGE]: ./TCPChat $port")
+		return
 	}
 	fmt.Println("Listening on port", port)
 
